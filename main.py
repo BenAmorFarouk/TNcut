@@ -39,12 +39,14 @@ def setup_application() -> QApplication:
     app.setOrganizationDomain("tncut.example.com")
 
     # Set application icon
-    icon_path = Path(__file__).parent / "logo.png"
+    icon_path = Path(__file__).parent / "logo.ico"
+    if not icon_path.exists():
+        icon_path = Path(__file__).parent / "logo.png"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
         logger.info(f"Application icon set from: {icon_path}")
     else:
-        logger.warning(f"Application icon not found at: {icon_path}")
+        logger.warning("Application icon not found")
 
     return app
 

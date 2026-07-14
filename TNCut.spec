@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('logo.png', '.')],
+    datas=[('logo.png', '.'), ('logo.ico', '.')],
     hiddenimports=['scapy.all', 'scapy.layers.l2', 'scapy.layers.inet', 'scapy.arch.windows', 'scapy.arch.windows.native', 'psutil'],
     hookspath=[],
     hooksconfig={},
