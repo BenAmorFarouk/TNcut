@@ -18,6 +18,7 @@ class NetworkSettings:
     ping_count: int = 3
     port_scan_timeout: float = 1.0
     bandwidth_limit: int = 100  # Mbps (0-100), used for speed percentage charts
+    interface: str = ""  # scapy interface name to scan on; "" = auto-detect
 
 
 @dataclass

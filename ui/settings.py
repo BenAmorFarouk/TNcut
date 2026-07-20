@@ -75,6 +75,16 @@ class SettingsWidget(QWidget):
         tab = QWidget()
         layout = QFormLayout(tab)
 
+        # Scan interface selection
+        self.interface_combo = QComboBox()
+        self.interface_combo.setToolTip(
+            "Network adapter used for scanning and ARP control. "
+            "Auto picks the adapter for your default route. "
+            "Choose explicitly if you switch between Wi-Fi and Ethernet."
+        )
+        self._populate_interfaces()
+        layout.addRow("Scan Interface:", self.interface_combo)
+
         # Refresh interval
         self.refresh_interval = QSpinBox()
         self.refresh_interval.setRange(1000, 60000)  # 1 second to 60 seconds
@@ -116,6 +126,21 @@ class SettingsWidget(QWidget):
         layout.addRow("Bandwidth Limit:", bw_layout)
 
         return tab
+
+    def _populate_interfaces(self):
+        """Fill the interface dropdown with Auto + available network adapters."""
+        self.interface_combo.clear()
+        # First item: auto-detect (empty string stored)
+        self.interface_combo.addItem("Auto (detect active network)", "")
+        try:
+            from network.scanner import network_scanner
+            for iface in network_scanner.list_interfaces():
+                label = iface["name"]
+                if iface.get("ip"):
+                    label = f"{iface['name']} — {iface['ip']}"
+                self.interface_combo.addItem(label, iface["name"])
+        except Exception as e:
+            logger.warning(f"Could not list interfaces: {e}")
 
     def _create_ui_tab(self) -> QWidget:
         """Create the UI/theme settings tab."""
@@ -190,7 +215,7 @@ class SettingsWidget(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: bold;")
         layout.addWidget(title)
 
-        version = QLabel("Version 1.0.0")
+        version = QLabel("Version 1.0.1")
         layout.addWidget(version)
 
         description = QLabel(
@@ -210,6 +235,9 @@ class SettingsWidget(QWidget):
 
         # Network settings
         if hasattr(settings, 'network'):
+            saved_iface = getattr(settings.network, 'interface', "")
+            idx = self.interface_combo.findData(saved_iface)
+            self.interface_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.refresh_interval.setValue(settings.network.refresh_interval)
             self.discovery_timeout.setValue(settings.network.timeout * 1000)  # Convert to ms
             self.ping_count.setValue(settings.network.ping_count)
@@ -247,6 +275,15 @@ class SettingsWidget(QWidget):
             settings.network.ping_count = self.ping_count.value()
             settings.network.port_scan_timeout = self.port_scan_timeout.value() / 1000.0  # Convert to seconds
             settings.network.bandwidth_limit = self.bandwidth_limit.value()
+
+            # Apply the chosen scan interface immediately
+            chosen_iface = self.interface_combo.currentData()
+            settings.network.interface = chosen_iface or ""
+            try:
+                from network.scanner import network_scanner
+                network_scanner.set_interface(settings.network.interface)
+            except Exception as e:
+                logger.warning(f"Could not apply scan interface: {e}")
 
             # Update UI settings
             if not hasattr(settings, 'ui'):

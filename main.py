@@ -34,7 +34,7 @@ def setup_application() -> QApplication:
     # Create application
     app = QApplication(sys.argv)
     app.setApplicationName("TNCut")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("1.0.1")
     app.setOrganizationName("TNCut")
     app.setOrganizationDomain("tncut.example.com")
 
@@ -60,7 +60,13 @@ def initialize_system() -> None:
 
         # Initialize database
         db_path = "data/tncut.db"
-        echo_sql = settings_manager.get().database.echo if hasattr(settings_manager.get(), 'database') else False
+        settings = settings_manager.get()
+        if isinstance(settings, dict):
+            echo_sql = settings.get('database', {}).get('echo', False)
+        elif hasattr(settings, 'database'):
+            echo_sql = settings.database.echo
+        else:
+            echo_sql = False
         init_database(db_path=db_path, echo=echo_sql)
         logger.info("Database initialized")
 
@@ -68,7 +74,13 @@ def initialize_system() -> None:
         enable_db_logging()
 
         # Apply theme
-        theme_mode_str = settings_manager.get().ui.theme if hasattr(settings_manager.get(), 'ui') else "dark"
+        settings = settings_manager.get()
+        if isinstance(settings, dict):
+            theme_mode_str = settings.get('ui', {}).get('theme', 'dark')
+        elif hasattr(settings, 'ui'):
+            theme_mode_str = settings.ui.theme
+        else:
+            theme_mode_str = "dark"
         theme_mode = ThemeMode.DARK if theme_mode_str.lower() == "dark" else ThemeMode.LIGHT
         ThemeManager().set_theme_mode(theme_mode)
         logger.info(f"Theme set to: {theme_mode.value}")

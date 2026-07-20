@@ -6,7 +6,9 @@ Handles device discovery using ARP scanning and other network discovery techniqu
 import asyncio
 import ipaddress
 import logging
+import os
 import subprocess
+import sys
 import time
 from typing import List, Dict, Optional, Callable, Tuple
 from datetime import datetime
@@ -20,6 +22,52 @@ try:
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
+
+def _load_oui_map():
+    """Load OUI vendor map from bundled text file."""
+    oui_map = {}
+    try:
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        oui_path = os.path.join(base, 'oui_vendors.txt')
+        if not os.path.exists(oui_path):
+            with open(os.path.join(os.path.dirname(sys.executable), 'oui_debug.txt'), 'w') as dbg:
+                dbg.write(f'frozen={getattr(sys, "frozen", False)}\n')
+                dbg.write(f'base={base}\n')
+                dbg.write(f'oui_path={oui_path}\n')
+                dbg.write(f'exists={os.path.exists(oui_path)}\n')
+                dbg.write(f'dir contents={os.listdir(base)[:20]}\n')
+            return oui_map
+        with open(oui_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    prefix, vendor = line.split('\t', 1)
+                    oui_map[prefix] = vendor
+    except Exception as e:
+        try:
+            with open(os.path.join(os.path.dirname(sys.executable), 'oui_debug.txt'), 'w') as dbg:
+                dbg.write(f'ERROR: {e}\n')
+        except Exception:
+            pass
+    return oui_map
+
+OUI_MAP = _load_oui_map()
+
+# Debug: write OUI map status on startup
+try:
+    _dbg_path = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else '.', 'oui_debug.txt')
+    with open(_dbg_path, 'w') as _df:
+        _df.write(f"OUI entries: {len(OUI_MAP)}\n")
+        _test_mac = '98:ba:5f:a0:20:4d'
+        _oui_key = _test_mac.upper().replace('-', ':').replace(':', '')[:6]
+        _df.write(f"Test key: {_oui_key}\n")
+        _df.write(f"Test result: {OUI_MAP.get(_oui_key, 'NOT FOUND')}\n")
+        _df.write(f"Sample keys: {list(OUI_MAP.keys())[:5]}\n")
+except:
+    pass
 
 from models import Device
 from utils.logger import get_logger
@@ -76,6 +124,34 @@ def get_local_ip_and_network() -> Tuple[Optional[str], Optional[str], Optional[s
         return local_ip, None, None
 
 
+def get_network_for_ip(local_ip: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Given a specific interface IP, derive (local_ip, network_cidr, gateway_ip).
+
+    Used when the user pins a specific interface instead of auto-detecting.
+    """
+    if not local_ip:
+        return None, None, None
+    for name, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and addr.address == local_ip:
+                try:
+                    network = ipaddress.IPv4Network(
+                        f"{local_ip}/{addr.netmask}", strict=False
+                    )
+                    gateway_ip = str(network.network_address + 1)
+                    return local_ip, str(network), gateway_ip
+                except Exception:
+                    pass
+    # Fallback: assume /24
+    try:
+        network = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
+        gateway_ip = str(network.network_address + 1)
+        return local_ip, str(network), gateway_ip
+    except Exception:
+        return local_ip, None, None
+
+
 class NetworkScanner:
     """Network scanner for discovering devices on the local network."""
 
@@ -86,16 +162,103 @@ class NetworkScanner:
         self._local_ip: Optional[str] = None
         self._network: Optional[str] = None
         self._gateway: Optional[str] = None
+        self._scan_iface: Optional[str] = None
 
         if SCAPY_AVAILABLE:
             conf.verb = 0
 
-        # Detect network on init
+        # Read a user-pinned interface from settings, if any (empty = auto).
+        saved_iface = ""
+        try:
+            from config.settings import settings_manager
+            saved_iface = getattr(settings_manager.get().network, 'interface', '') or ""
+        except Exception:
+            saved_iface = ""
+
+        self._configure_network(saved_iface)
+
+    def _configure_network(self, iface_name: str = "") -> None:
+        """
+        Resolve the network range, gateway, and scapy interface.
+
+        If iface_name is given, derive everything from that adapter's IP.
+        Otherwise auto-detect via the default route.
+        """
+        if iface_name:
+            local_ip = self._ip_for_iface_name(iface_name)
+            if local_ip:
+                self._local_ip, self._network, self._gateway = get_network_for_ip(local_ip)
+                self._scan_iface = iface_name
+                logger.info(f"Using pinned interface '{iface_name}': "
+                            f"network {self._network} (local IP: {self._local_ip}, gateway: {self._gateway})")
+                return
+            logger.warning(f"Pinned interface '{iface_name}' not found or has no IPv4; falling back to auto-detect")
+
+        # Auto-detect
         self._local_ip, self._network, self._gateway = get_local_ip_and_network()
         if self._network:
             logger.info(f"Detected network: {self._network} (local IP: {self._local_ip}, gateway: {self._gateway})")
         else:
             logger.warning("Could not auto-detect network")
+
+        # Match the scapy interface whose IP equals our local IP, so ARP
+        # packets go out the correct adapter instead of scapy's default.
+        self._scan_iface = self._resolve_scan_iface()
+        if self._scan_iface:
+            logger.info(f"Using scan interface: {self._scan_iface}")
+        else:
+            logger.warning("Could not match a scapy interface to the local IP; using default")
+
+    def _resolve_scan_iface(self) -> Optional[str]:
+        """Find the scapy interface name whose IPv4 address matches our local IP."""
+        if not SCAPY_AVAILABLE or not self._local_ip:
+            return None
+        try:
+            from scapy.all import get_working_ifaces
+            for iface in get_working_ifaces():
+                if getattr(iface, "ip", None) == self._local_ip:
+                    return iface.name
+        except Exception as e:
+            logger.warning(f"Failed to resolve scan interface: {e}")
+        return None
+
+    def _ip_for_iface_name(self, iface_name: str) -> Optional[str]:
+        """Return the IPv4 address of the scapy interface with the given name."""
+        if not SCAPY_AVAILABLE:
+            return None
+        try:
+            from scapy.all import get_working_ifaces
+            for iface in get_working_ifaces():
+                if iface.name == iface_name:
+                    ip = getattr(iface, "ip", None)
+                    if ip and ip != "0.0.0.0":
+                        return ip
+        except Exception as e:
+            logger.warning(f"Failed to look up IP for interface '{iface_name}': {e}")
+        return None
+
+    def list_interfaces(self) -> List[Dict[str, str]]:
+        """
+        List selectable network interfaces for the settings UI.
+
+        Returns a list of {'name': ..., 'ip': ...} for adapters that have an IPv4.
+        """
+        result: List[Dict[str, str]] = []
+        if not SCAPY_AVAILABLE:
+            return result
+        try:
+            from scapy.all import get_working_ifaces
+            for iface in get_working_ifaces():
+                ip = getattr(iface, "ip", None)
+                if ip and ip != "0.0.0.0":
+                    result.append({'name': iface.name, 'ip': ip})
+        except Exception as e:
+            logger.warning(f"Failed to list interfaces: {e}")
+        return result
+
+    def set_interface(self, iface_name: str = "") -> None:
+        """Re-configure the scanner to use a specific interface ('' = auto-detect)."""
+        self._configure_network(iface_name)
 
     @property
     def local_ip(self) -> str:
@@ -167,7 +330,10 @@ class NetworkScanner:
             ether = Ether(dst="ff:ff:ff:ff:ff:ff")
             packet = ether / arp
 
-            result = srp(packet, timeout=3, verbose=0)[0]
+            if self._scan_iface:
+                result = srp(packet, timeout=3, verbose=0, iface=self._scan_iface)[0]
+            else:
+                result = srp(packet, timeout=3, verbose=0)[0]
 
             devices = []
             for sent, received in result:
@@ -220,43 +386,51 @@ class NetworkScanner:
 
     async def _get_hostname(self, ip: str) -> str:
         try:
+            socket.setdefaulttimeout(2)
             hostname = socket.gethostbyaddr(ip)[0]
-            return hostname
-        except (socket.herror, socket.gaierror):
-            return ""
+            if hostname and hostname != ip:
+                return hostname
+        except (socket.herror, socket.gaierror, socket.timeout, OSError):
+            pass
+        finally:
+            socket.setdefaulttimeout(None)
+        return ""
 
     def _get_vendor_from_mac(self, mac: str) -> str:
-        oui = mac.upper().replace('-', ':').split(':')[0:3]
-
-        oui_map = {
-            '00:50:56': 'VMware',
-            '00:0C:29': 'VMware',
-            '00:1C:14': 'VMware',
-            '00:05:69': 'VMware',
-            '00:1C:42': 'VMware',
-            '00:16:3E': 'Xen',
-            '00:18:00': 'HP',
-            '00:1B:21': 'Intel',
-            '00:1F:16': 'Intel',
-            '00:21:5A': 'Apple',
-            '00:23:6C': 'Apple',
-            '00:25:00': 'Apple',
-            '00:26:08': 'Apple',
-            '00:26:BB': 'Apple',
-            '00:17:F2': 'Apple',
-            '00:1B:63': 'Apple',
-            '00:1F:F3': 'Apple',
-            '00:22:41': 'Apple',
-            '00:23:12': 'Apple',
-            '00:23:32': 'Apple',
-            '00:23:76': 'Apple',
-            '00:25:4B': 'Apple',
-            '00:25:BC': 'Apple',
-            '00:26:4A': 'Apple',
-            '00:26:B0': 'Apple',
-        }
-
-        return oui_map.get(':'.join(oui), 'Unknown')
+        first_byte = int(mac.split(':')[0].replace('-', ''), 16)
+        if first_byte & 0x02:
+            return 'Randomized MAC'
+        if OUI_MAP:
+            oui = mac.upper().replace('-', ':').replace(':', '')[:6]
+            vendor = OUI_MAP.get(oui, '')
+            if vendor:
+                short_names = {
+                    'TP-Link Systems Inc.': 'TP-Link',
+                    'Hangzhou Hikvision Digital Technology Co.,Ltd.': 'Hikvision',
+                    'GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD': 'OPPO',
+                    'Xiaomi Communications Co Ltd': 'Xiaomi',
+                    'Samsung Electronics Co.,Ltd': 'Samsung',
+                    'Apple, Inc.': 'Apple',
+                    'Huawei Technologies Co.,Ltd': 'Huawei',
+                    'Intel Corporate': 'Intel',
+                    'Realtek Semiconductor Corp.': 'Realtek',
+                    'ASUSTek COMPUTER INC.': 'ASUS',
+                    'HONOR Device Co., Ltd.': 'HONOR',
+                    'Dell Inc.': 'Dell',
+                    'Hewlett Packard': 'HP',
+                    'Microsoft Corporation': 'Microsoft',
+                    'Google, Inc.': 'Google',
+                    'Amazon Technologies Inc.': 'Amazon',
+                    'Sony Interactive Entertainment Inc.': 'Sony/PlayStation',
+                    'Microsoft Xbox': 'Xbox',
+                    'VMware, Inc.': 'VMware',
+                    'Raspberry Pi': 'Raspberry Pi',
+                }
+                for long, short in short_names.items():
+                    if long.lower() in vendor.lower():
+                        return short
+                return vendor.split(' ')[0] if len(vendor) > 30 else vendor
+        return 'Unknown'
 
     def _guess_device_type(self, hostname: str, vendor: str, mac: str) -> str:
         hostname_lower = hostname.lower()
@@ -279,12 +453,24 @@ class NetworkScanner:
         elif any(x in hostname_lower for x in ['camera', 'cam']):
             return 'Camera'
 
-        if 'apple' in vendor_lower:
+        if any(x in vendor_lower for x in ['oppo', 'xiaomi', 'samsung', 'huawei', 'honor', 'oneplus', 'vivo', 'realme']):
+            return 'Phone'
+        elif 'apple' in vendor_lower:
             return 'Apple Device'
-        elif 'samsung' in vendor_lower:
-            return 'Samsung Device'
+        elif 'tp-link' in vendor_lower or 'netgear' in vendor_lower or 'cisco' in vendor_lower or 'ubiquiti' in vendor_lower:
+            return 'Router'
+        elif 'hikvision' in vendor_lower or 'dahua' in vendor_lower:
+            return 'Camera'
+        elif 'sony/playstation' in vendor_lower or 'xbox' in vendor_lower or 'nintendo' in vendor_lower:
+            return 'Gaming Console'
         elif 'vmware' in vendor_lower or 'virtual' in vendor_lower:
             return 'Virtual Machine'
+        elif 'raspberry' in vendor_lower:
+            return 'SBC'
+        elif 'amazon' in vendor_lower or 'google' in vendor_lower:
+            return 'Smart Device'
+        elif vendor_lower == 'randomized mac':
+            return 'Phone'
 
         return 'Unknown'
 

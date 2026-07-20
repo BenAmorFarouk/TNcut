@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+# -*- mode: python ; coding: utf-8 -*-
+
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('logo.png', '.'), ('logo.ico', '.')],
+    datas=[('logo.png', '.'), ('logo.ico', '.'), ('oui_vendors.txt', '.')],
     hiddenimports=['scapy.all', 'scapy.layers.l2', 'scapy.layers.inet', 'scapy.arch.windows', 'scapy.arch.windows.native', 'psutil'],
     hookspath=[],
     hooksconfig={},

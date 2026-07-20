@@ -55,7 +55,7 @@ def show_splash_screen(app: QApplication, duration: int = 2000) -> QSplashScreen
     painter.setPen(QColor("#aaaaaa"))
     font = QFont("Segoe UI", 10)
     painter.setFont(font)
-    painter.drawText(0, 210, 400, 30, Qt.AlignCenter, "Network Monitor v1.0.0")
+    painter.drawText(0, 210, 400, 30, Qt.AlignCenter, "Network Monitor v1.0.1")
 
     # Draw loading text
     painter.setPen(QColor("#888888"))

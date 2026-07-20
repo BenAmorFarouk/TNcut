@@ -2,15 +2,15 @@
 
 ; General
 Name "TNcut"
-OutFile "TNcut_Setup_1.0.0.exe"
+OutFile "TNcut_Setup_1.0.1.exe"
 InstallDir "$PROGRAMFILES\TNcut"
 InstallDirRegKey HKLM "Software\TNcut" "InstallDir"
 RequestExecutionLevel admin
 
 ; Version info
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.0.1.0"
 VIAddVersionKey "ProductName" "TNcut"
-VIAddVersionKey "ProductVersion" "1.0.0"
+VIAddVersionKey "ProductVersion" "1.0.1"
 VIAddVersionKey "FileDescription" "TNcut Network Monitor Installer"
 VIAddVersionKey "LegalCopyright" "MIT License"
 
@@ -19,7 +19,7 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 !define MUI_UNICON "logo.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Welcome to TNcut Setup"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will install TNcut 1.0.0 on your computer.$\r$\n$\r$\nTNcut is a network monitoring and per-device bandwidth control tool.$\r$\n$\r$\nNote: This application requires Administrator privileges and Npcap to function properly.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT "This wizard will install TNcut 1.0.1 on your computer.$\r$\n$\r$\nTNcut is a network monitoring and per-device bandwidth control tool.$\r$\n$\r$\nNote: This application requires Administrator privileges and Npcap to function properly.$\r$\n$\r$\nClick Next to continue."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TNCut.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch TNcut (as Administrator)"
 
@@ -46,7 +46,7 @@ Section "Install"
     ; Write registry keys
     WriteRegStr HKLM "Software\TNcut" "InstallDir" "$INSTDIR"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "DisplayName" "TNcut"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "DisplayVersion" "1.0.0"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "DisplayVersion" "1.0.1"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "Publisher" "BenAmorFarouk"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "UninstallString" '"$INSTDIR\uninstall.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TNcut" "DisplayIcon" "$INSTDIR\TNCut.exe"
