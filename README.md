@@ -150,4 +150,4 @@ This tool is intended for **authorized network administration and educational pu
 
 ## License
 
-MIT License
+MIT License © BenAmorFarouk
