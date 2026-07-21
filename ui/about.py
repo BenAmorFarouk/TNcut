@@ -57,7 +57,7 @@ class AboutWidget(QWidget):
         title_label.setFont(title_font)
         title_layout.addWidget(title_label)
 
-        version_label = QLabel("Version 1.0.1")
+        version_label = QLabel("Version 1.0.2")
         version_label.setStyleSheet("color: #666;")
         title_layout.addWidget(version_label)
 

@@ -215,7 +215,7 @@ class SettingsWidget(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: bold;")
         layout.addWidget(title)
 
-        version = QLabel("Version 1.0.1")
+        version = QLabel("Version 1.0.2")
         layout.addWidget(version)
 
         description = QLabel(
