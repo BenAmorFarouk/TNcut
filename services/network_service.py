@@ -99,6 +99,39 @@ class NetworkService:
                         break
                     threading.Event().wait(1)
 
+    def _upsert_device(self, device_data: dict):
+        """Insert or update a device row in the database from scan data.
+
+        Preserves user-owned fields (notes, first_seen) on updates.
+        """
+        try:
+            from database.session import get_db_session
+            from models.models import Device as DeviceModel
+
+            ip = device_data['ip']
+            with get_db_session() as session:
+                db_device = session.query(DeviceModel).filter_by(
+                    ip_address=ip
+                ).first()
+                if db_device is None:
+                    db_device = DeviceModel(
+                        ip_address=ip,
+                        first_seen=device_data.get(
+                            'first_seen', device_data['last_seen']),
+                    )
+                    session.add(db_device)
+
+                db_device.mac_address = device_data.get('mac', '') or db_device.mac_address
+                db_device.hostname = device_data.get('hostname')
+                db_device.vendor = device_data.get('vendor')
+                db_device.device_type = device_data.get('device_type')
+                db_device.is_online = True
+                db_device.response_time = device_data.get('response_time', 0)
+                db_device.last_seen = device_data['last_seen']
+                # notes are intentionally left untouched here
+        except Exception as e:
+            logger.error(f"Could not upsert device {device_data.get('ip')}: {e}")
+
     def _record_history_event(self, device_ip: str, event_type: str,
                               description: str, old_value: str = None,
                               new_value: str = None):
@@ -145,6 +178,10 @@ class NetworkService:
                     first_seen=device_data.get('first_seen', device_data['last_seen'])
                 )
                 new_devices.append(device)
+
+                # Persist/refresh the device row so notes, history, and traffic
+                # logs have a real DB record to attach to.
+                self._upsert_device(device_data)
 
                 # Record "joined" event for new devices
                 if ip not in self._known_ips:

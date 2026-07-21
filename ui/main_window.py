@@ -329,6 +329,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle application close event."""
         self.update_timer.stop()
+        # Stop traffic monitoring if running
+        if hasattr(self, 'traffic'):
+            self.traffic.stop_monitoring()
         # Restore all ARP-spoofed devices
         from network.arp_spoof import arp_spoofer
         arp_spoofer.restore_all()

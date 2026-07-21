@@ -259,6 +259,13 @@ class NetworkScanner:
     def set_interface(self, iface_name: str = "") -> None:
         """Re-configure the scanner to use a specific interface ('' = auto-detect)."""
         self._configure_network(iface_name)
+        # The ARP spoofer caches gateway IP/MAC/interface derived from the old
+        # network, so it must re-resolve them against the new interface.
+        try:
+            from network.arp_spoof import arp_spoofer
+            arp_spoofer.reset_gateway_info()
+        except Exception as e:
+            logger.warning(f"Could not reset ARP spoofer after interface change: {e}")
 
     @property
     def local_ip(self) -> str:
@@ -267,6 +274,11 @@ class NetworkScanner:
     @property
     def gateway(self) -> str:
         return self._gateway or "Unknown"
+
+    @property
+    def scan_iface(self) -> Optional[str]:
+        """The resolved scapy interface name used for scanning/spoofing (None = default)."""
+        return self._scan_iface
 
     def ping_host(self, ip: str, count: int = 1, timeout: int = 2) -> Optional[float]:
         """Ping a host and return average response time in ms, or None if unreachable."""

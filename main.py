@@ -33,6 +33,11 @@ def setup_application() -> QApplication:
     """
     # Create application
     app = QApplication(sys.argv)
+    # Force the Fusion style so our custom palette and stylesheet apply
+    # consistently. The native Windows style only partially honors QSS,
+    # which leaves tab text and some controls using system colors (the
+    # cause of invisible tab labels and a broken-looking light theme).
+    app.setStyle("Fusion")
     app.setApplicationName("TNCut")
     app.setApplicationVersion("1.0.1")
     app.setOrganizationName("TNCut")

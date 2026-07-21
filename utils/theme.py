@@ -374,6 +374,51 @@ class ThemeManager:
             color: {self.get_color('text')};
         }}
 
+        /* Dashboard / Traffic stat cards */
+        QLabel#dashboardTitle {{
+            color: {self.get_color('text')};
+        }}
+
+        QFrame#statCard {{
+            background-color: {self.get_color('base')};
+            border: 1px solid {self.get_color('border')};
+            border-radius: 6px;
+        }}
+
+        QLabel#statTitle {{
+            color: {self.get_color('text')};
+        }}
+
+        QLabel#statValue {{
+            color: {self.get_color('highlight')};
+        }}
+
+        QLabel#statIcon {{
+            color: {self.get_color('text')};
+        }}
+
+        QPushButton#actionButton {{
+            background-color: {self.get_color('highlight')};
+            color: {self.get_color('highlighted_text')};
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+        }}
+
+        QPushButton#actionButton:hover {{
+            background-color: {self.get_color('highlight_light')};
+        }}
+
+        QPushButton#actionButton:pressed {{
+            background-color: {self.get_color('highlight_dark')};
+        }}
+
+        QPushButton#actionButton:disabled {{
+            background-color: {self.get_color('button')};
+            color: {self.get_color('border')};
+        }}
+
         /* Status Bar Styles */
         QStatusBar {{
             background-color: {self.get_color('base')};

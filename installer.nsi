@@ -40,8 +40,10 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 Section "Install"
     SetOutPath "$INSTDIR"
 
-    ; Copy all files from dist
-    File /r "dist\TNCut\*.*"
+    ; Copy all files from dist. Exclude the runtime database: it is created
+    ; on first launch, and bundling it both locks the build against a running
+    ; instance and ships the builder's scanned network data to end users.
+    File /r /x "tncut.db" /x "*.db-journal" /x "*.log" "dist\TNCut\*.*"
 
     ; Write registry keys
     WriteRegStr HKLM "Software\TNcut" "InstallDir" "$INSTDIR"

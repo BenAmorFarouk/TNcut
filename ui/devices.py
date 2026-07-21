@@ -276,11 +276,10 @@ class DevicesWidget(QWidget):
         self.traceroute_button.setEnabled(has_selection)
         self.save_notes_button.setEnabled(has_selection)
 
-        if has_selection and hasattr(self, '_current_devices'):
-            # Get selected device
-            index = indexes[0].row()
-            if 0 <= index < len(self._current_devices):
-                device = self._current_devices[index]
+        if has_selection:
+            # Get selected device from the model (respects sort order)
+            device = self._table_model.get_device(indexes[0].row())
+            if device is not None:
                 self._display_device_details(device)
                 self.selected_device_label.setText(f"Selected: {device.hostname or device.ip_address}")
             else:
@@ -327,13 +326,8 @@ class DevicesWidget(QWidget):
 
     def _on_ping(self):
         """Ping the selected device and show results."""
-        sel_model = self.device_table.selectionModel()
-        indexes = sel_model.selectedRows() if sel_model else []
-        if not indexes or not self._current_devices:
-            return
-        row = indexes[0].row()
-        if 0 <= row < len(self._current_devices):
-            device = self._current_devices[row]
+        device = self._get_selected_device()
+        if device:
             ip = device.ip_address
             self.ping_button.setEnabled(False)
             self.ping_button.setText("Pinging...")
@@ -398,15 +392,17 @@ class DevicesWidget(QWidget):
         QMessageBox.information(self, "Traceroute", "Traceroute feature coming soon.")
 
     def _get_selected_device(self):
-        """Get the currently selected device."""
+        """Get the currently selected device.
+
+        Reads from the table model, which owns the (possibly sorted) row
+        order. Indexing a separate list by the view row would return the
+        wrong device after any column sort.
+        """
         sel_model = self.device_table.selectionModel()
         indexes = sel_model.selectedRows() if sel_model else []
-        if not indexes or not self._current_devices:
+        if not indexes:
             return None
-        row = indexes[0].row()
-        if 0 <= row < len(self._current_devices):
-            return self._current_devices[row]
-        return None
+        return self._table_model.get_device(indexes[0].row())
 
     def _on_limit_speed(self):
         """Show speed limit dialog for selected device."""
@@ -432,8 +428,13 @@ class DevicesWidget(QWidget):
                     return
                 ok = arp_spoofer.set_limit(device.ip_address, device.mac_address, limit_kbps)
                 if not ok:
-                    QMessageBox.warning(self, "Error",
-                                        "Failed to set limit. Make sure you're running as Administrator.")
+                    QMessageBox.warning(
+                        self, "Error",
+                        "Couldn't set the speed limit for this device.\n\n"
+                        "This usually means the gateway MAC couldn't be resolved on the "
+                        "current scan interface. Check Settings → Network → Scan "
+                        "Interface, make sure it matches the network the device is on, and "
+                        "confirm the app is running as Administrator with Npcap installed.")
             self._refresh_limits()
 
     def _on_cut_internet(self):
@@ -449,8 +450,13 @@ class DevicesWidget(QWidget):
         if reply == QMessageBox.Yes:
             ok = arp_spoofer.set_limit(device.ip_address, device.mac_address, 0)
             if not ok:
-                QMessageBox.warning(self, "Error",
-                                    "Failed. Make sure you're running as Administrator.")
+                QMessageBox.warning(
+                    self, "Error",
+                    "Couldn't cut internet for this device.\n\n"
+                    "This usually means the gateway MAC couldn't be resolved on the "
+                    "current scan interface. Check Settings → Network → Scan "
+                    "Interface, make sure it matches the network the device is on, and "
+                    "confirm the app is running as Administrator with Npcap installed.")
             self._refresh_limits()
 
     def _on_restore_internet(self):
@@ -467,13 +473,8 @@ class DevicesWidget(QWidget):
 
     def _on_save_notes(self):
         """Handle saving device notes."""
-        sel_model = self.device_table.selectionModel()
-        indexes = sel_model.selectedRows() if sel_model else []
-        if not indexes or not self._current_devices:
-            return
-        row = indexes[0].row()
-        if 0 <= row < len(self._current_devices):
-            device = self._current_devices[row]
+        device = self._get_selected_device()
+        if device:
             notes_text = self.notes_edit.toPlainText()
             try:
                 from database.session import get_db_session
@@ -482,9 +483,24 @@ class DevicesWidget(QWidget):
                     db_device = session.query(DeviceModel).filter_by(
                         ip_address=device.ip_address
                     ).first()
-                    if db_device:
-                        db_device.notes = notes_text
+                    if db_device is None:
+                        # Device hasn't been persisted yet (e.g. notes saved
+                        # before the next scan cycle) — create the row now.
+                        db_device = DeviceModel(
+                            ip_address=device.ip_address,
+                            mac_address=getattr(device, 'mac_address', None),
+                            hostname=getattr(device, 'hostname', None),
+                            vendor=getattr(device, 'vendor', None),
+                            device_type=getattr(device, 'device_type', None),
+                        )
+                        session.add(db_device)
+                    db_device.notes = notes_text
                 logger.info(f"Notes saved for {device.ip_address}")
+                self.save_notes_button.setText("✓ Saved")
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(
+                    1500,
+                    lambda: self.save_notes_button.setText("💾 Save Notes"))
             except Exception as e:
                 logger.error(f"Error saving notes: {e}")
                 QMessageBox.warning(self, "Error", f"Could not save notes: {e}")
@@ -495,8 +511,7 @@ class DevicesWidget(QWidget):
         if not indexes:
             return
 
-        row = indexes[0].row()
-        device = self._current_devices[row] if 0 <= row < len(self._current_devices) else None
+        device = self._get_selected_device()
 
         menu = QMenu()
 
